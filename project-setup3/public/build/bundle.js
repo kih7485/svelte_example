@@ -35,6 +35,9 @@ var app = (function () {
     function is_empty(obj) {
         return Object.keys(obj).length === 0;
     }
+    function null_to_empty(value) {
+        return value == null ? '' : value;
+    }
     function append(target, node) {
         target.appendChild(node);
     }
@@ -44,6 +47,12 @@ var app = (function () {
     function detach(node) {
         if (node.parentNode) {
             node.parentNode.removeChild(node);
+        }
+    }
+    function destroy_each(iterations, detaching) {
+        for (let i = 0; i < iterations.length; i += 1) {
+            if (iterations[i])
+                iterations[i].d(detaching);
         }
     }
     function element(name) {
@@ -78,9 +87,6 @@ var app = (function () {
     function children(element) {
         return Array.from(element.childNodes);
     }
-    function set_input_value(input, value) {
-        input.value = value == null ? '' : value;
-    }
     function custom_event(type, detail, { bubbles = false, cancelable = false } = {}) {
         const e = document.createEvent('CustomEvent');
         e.initCustomEvent(type, bubbles, cancelable, detail);
@@ -90,6 +96,49 @@ var app = (function () {
     let current_component;
     function set_current_component(component) {
         current_component = component;
+    }
+    function get_current_component() {
+        if (!current_component)
+            throw new Error('Function called outside component initialization');
+        return current_component;
+    }
+    /**
+     * Creates an event dispatcher that can be used to dispatch [component events](/docs#template-syntax-component-directives-on-eventname).
+     * Event dispatchers are functions that can take two arguments: `name` and `detail`.
+     *
+     * Component events created with `createEventDispatcher` create a
+     * [CustomEvent](https://developer.mozilla.org/en-US/docs/Web/API/CustomEvent).
+     * These events do not [bubble](https://developer.mozilla.org/en-US/docs/Learn/JavaScript/Building_blocks/Events#Event_bubbling_and_capture).
+     * The `detail` argument corresponds to the [CustomEvent.detail](https://developer.mozilla.org/en-US/docs/Web/API/CustomEvent/detail)
+     * property and can contain any type of data.
+     *
+     * https://svelte.dev/docs#run-time-svelte-createeventdispatcher
+     */
+    function createEventDispatcher() {
+        const component = get_current_component();
+        return (type, detail, { cancelable = false } = {}) => {
+            const callbacks = component.$$.callbacks[type];
+            if (callbacks) {
+                // TODO are there situations where events could be dispatched
+                // in a server (non-DOM) environment?
+                const event = custom_event(type, detail, { cancelable });
+                callbacks.slice().forEach(fn => {
+                    fn.call(component, event);
+                });
+                return !event.defaultPrevented;
+            }
+            return true;
+        };
+    }
+    // TODO figure out if we still want to support
+    // shorthand events, or if we want to implement
+    // a real bubbling mechanism
+    function bubble(component, event) {
+        const callbacks = component.$$.callbacks[event.type];
+        if (callbacks) {
+            // @ts-ignore
+            callbacks.slice().forEach(fn => fn.call(this, event));
+        }
     }
 
     const dirty_components = [];
@@ -225,96 +274,6 @@ var app = (function () {
         }
         else if (callback) {
             callback();
-        }
-    }
-    function outro_and_destroy_block(block, lookup) {
-        transition_out(block, 1, 1, () => {
-            lookup.delete(block.key);
-        });
-    }
-    function update_keyed_each(old_blocks, dirty, get_key, dynamic, ctx, list, lookup, node, destroy, create_each_block, next, get_context) {
-        let o = old_blocks.length;
-        let n = list.length;
-        let i = o;
-        const old_indexes = {};
-        while (i--)
-            old_indexes[old_blocks[i].key] = i;
-        const new_blocks = [];
-        const new_lookup = new Map();
-        const deltas = new Map();
-        i = n;
-        while (i--) {
-            const child_ctx = get_context(ctx, list, i);
-            const key = get_key(child_ctx);
-            let block = lookup.get(key);
-            if (!block) {
-                block = create_each_block(key, child_ctx);
-                block.c();
-            }
-            else if (dynamic) {
-                block.p(child_ctx, dirty);
-            }
-            new_lookup.set(key, new_blocks[i] = block);
-            if (key in old_indexes)
-                deltas.set(key, Math.abs(i - old_indexes[key]));
-        }
-        const will_move = new Set();
-        const did_move = new Set();
-        function insert(block) {
-            transition_in(block, 1);
-            block.m(node, next);
-            lookup.set(block.key, block);
-            next = block.first;
-            n--;
-        }
-        while (o && n) {
-            const new_block = new_blocks[n - 1];
-            const old_block = old_blocks[o - 1];
-            const new_key = new_block.key;
-            const old_key = old_block.key;
-            if (new_block === old_block) {
-                // do nothing
-                next = new_block.first;
-                o--;
-                n--;
-            }
-            else if (!new_lookup.has(old_key)) {
-                // remove old block
-                destroy(old_block, lookup);
-                o--;
-            }
-            else if (!lookup.has(new_key) || will_move.has(new_key)) {
-                insert(new_block);
-            }
-            else if (did_move.has(old_key)) {
-                o--;
-            }
-            else if (deltas.get(new_key) > deltas.get(old_key)) {
-                did_move.add(new_key);
-                insert(new_block);
-            }
-            else {
-                will_move.add(old_key);
-                o--;
-            }
-        }
-        while (o--) {
-            const old_block = old_blocks[o];
-            if (!new_lookup.has(old_block.key))
-                destroy(old_block, lookup);
-        }
-        while (n)
-            insert(new_blocks[n - 1]);
-        return new_blocks;
-    }
-    function validate_each_keys(ctx, list, get_context, get_key) {
-        const keys = new Set();
-        for (let i = 0; i < list.length; i++) {
-            const key = get_key(get_context(ctx, list, i));
-            if (keys.has(key)) {
-                throw new Error('Cannot have duplicate keys in a keyed each');
-            }
-            keys.add(key);
         }
     }
     function create_component(block) {
@@ -487,6 +446,10 @@ var app = (function () {
         else
             dispatch_dev('SvelteDOMSetAttribute', { node, attribute, value });
     }
+    function prop_dev(node, property, value) {
+        node[property] = value;
+        dispatch_dev('SvelteDOMSetProperty', { node, property, value });
+    }
     function set_data_dev(text, data) {
         data = '' + data;
         if (text.wholeText === data)
@@ -532,9 +495,9 @@ var app = (function () {
 
     /* src/UI/Header.svelte generated by Svelte v3.55.1 */
 
-    const file$3 = "src/UI/Header.svelte";
+    const file$5 = "src/UI/Header.svelte";
 
-    function create_fragment$3(ctx) {
+    function create_fragment$5(ctx) {
     	let header;
     	let h1;
 
@@ -544,9 +507,9 @@ var app = (function () {
     			h1 = element("h1");
     			h1.textContent = "Meet Us";
     			attr_dev(h1, "class", "svelte-660uah");
-    			add_location(h1, file$3, 22, 4, 408);
+    			add_location(h1, file$5, 22, 4, 408);
     			attr_dev(header, "class", "svelte-660uah");
-    			add_location(header, file$3, 21, 0, 395);
+    			add_location(header, file$5, 21, 0, 395);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -565,7 +528,7 @@ var app = (function () {
 
     	dispatch_dev("SvelteRegisterBlock", {
     		block,
-    		id: create_fragment$3.name,
+    		id: create_fragment$5.name,
     		type: "component",
     		source: "",
     		ctx
@@ -574,7 +537,7 @@ var app = (function () {
     	return block;
     }
 
-    function instance$3($$self, $$props) {
+    function instance$5($$self, $$props) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('Header', slots, []);
     	const writable_props = [];
@@ -589,30 +552,273 @@ var app = (function () {
     class Header extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$3, create_fragment$3, safe_not_equal, {});
+    		init(this, options, instance$5, create_fragment$5, safe_not_equal, {});
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
     			tagName: "Header",
     			options,
-    			id: create_fragment$3.name
+    			id: create_fragment$5.name
     		});
     	}
     }
 
+    /* src/UI/Button.svelte generated by Svelte v3.55.1 */
+
+    const file$4 = "src/UI/Button.svelte";
+
+    // (88:0) {:else}
+    function create_else_block$1(ctx) {
+    	let button;
+    	let t;
+    	let button_class_value;
+    	let mounted;
+    	let dispose;
+
+    	const block = {
+    		c: function create() {
+    			button = element("button");
+    			t = text(/*caption*/ ctx[1]);
+    			attr_dev(button, "class", button_class_value = "" + (null_to_empty(/*mode*/ ctx[3]) + " svelte-179fpew"));
+    			attr_dev(button, "type", /*type*/ ctx[0]);
+    			add_location(button, file$4, 88, 4, 1554);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, button, anchor);
+    			append_dev(button, t);
+
+    			if (!mounted) {
+    				dispose = listen_dev(button, "click", /*click_handler*/ ctx[4], false, false, false);
+    				mounted = true;
+    			}
+    		},
+    		p: function update(ctx, dirty) {
+    			if (dirty & /*caption*/ 2) set_data_dev(t, /*caption*/ ctx[1]);
+
+    			if (dirty & /*mode*/ 8 && button_class_value !== (button_class_value = "" + (null_to_empty(/*mode*/ ctx[3]) + " svelte-179fpew"))) {
+    				attr_dev(button, "class", button_class_value);
+    			}
+
+    			if (dirty & /*type*/ 1) {
+    				attr_dev(button, "type", /*type*/ ctx[0]);
+    			}
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(button);
+    			mounted = false;
+    			dispose();
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_else_block$1.name,
+    		type: "else",
+    		source: "(88:0) {:else}",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    // (86:0) {#if href}
+    function create_if_block$1(ctx) {
+    	let a;
+    	let t;
+
+    	const block = {
+    		c: function create() {
+    			a = element("a");
+    			t = text(/*caption*/ ctx[1]);
+    			attr_dev(a, "href", /*href*/ ctx[2]);
+    			attr_dev(a, "class", "svelte-179fpew");
+    			add_location(a, file$4, 86, 4, 1518);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, a, anchor);
+    			append_dev(a, t);
+    		},
+    		p: function update(ctx, dirty) {
+    			if (dirty & /*caption*/ 2) set_data_dev(t, /*caption*/ ctx[1]);
+
+    			if (dirty & /*href*/ 4) {
+    				attr_dev(a, "href", /*href*/ ctx[2]);
+    			}
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(a);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_if_block$1.name,
+    		type: "if",
+    		source: "(86:0) {#if href}",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function create_fragment$4(ctx) {
+    	let if_block_anchor;
+
+    	function select_block_type(ctx, dirty) {
+    		if (/*href*/ ctx[2]) return create_if_block$1;
+    		return create_else_block$1;
+    	}
+
+    	let current_block_type = select_block_type(ctx);
+    	let if_block = current_block_type(ctx);
+
+    	const block = {
+    		c: function create() {
+    			if_block.c();
+    			if_block_anchor = empty();
+    		},
+    		l: function claim(nodes) {
+    			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
+    		},
+    		m: function mount(target, anchor) {
+    			if_block.m(target, anchor);
+    			insert_dev(target, if_block_anchor, anchor);
+    		},
+    		p: function update(ctx, [dirty]) {
+    			if (current_block_type === (current_block_type = select_block_type(ctx)) && if_block) {
+    				if_block.p(ctx, dirty);
+    			} else {
+    				if_block.d(1);
+    				if_block = current_block_type(ctx);
+
+    				if (if_block) {
+    					if_block.c();
+    					if_block.m(if_block_anchor.parentNode, if_block_anchor);
+    				}
+    			}
+    		},
+    		i: noop,
+    		o: noop,
+    		d: function destroy(detaching) {
+    			if_block.d(detaching);
+    			if (detaching) detach_dev(if_block_anchor);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_fragment$4.name,
+    		type: "component",
+    		source: "",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function instance$4($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Button', slots, []);
+    	let { type = "button" } = $$props;
+    	let { caption } = $$props;
+    	let { href = null } = $$props;
+    	let { mode = null } = $$props;
+
+    	$$self.$$.on_mount.push(function () {
+    		if (caption === undefined && !('caption' in $$props || $$self.$$.bound[$$self.$$.props['caption']])) {
+    			console.warn("<Button> was created without expected prop 'caption'");
+    		}
+    	});
+
+    	const writable_props = ['type', 'caption', 'href', 'mode'];
+
+    	Object.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Button> was created with unknown prop '${key}'`);
+    	});
+
+    	function click_handler(event) {
+    		bubble.call(this, $$self, event);
+    	}
+
+    	$$self.$$set = $$props => {
+    		if ('type' in $$props) $$invalidate(0, type = $$props.type);
+    		if ('caption' in $$props) $$invalidate(1, caption = $$props.caption);
+    		if ('href' in $$props) $$invalidate(2, href = $$props.href);
+    		if ('mode' in $$props) $$invalidate(3, mode = $$props.mode);
+    	};
+
+    	$$self.$capture_state = () => ({ type, caption, href, mode });
+
+    	$$self.$inject_state = $$props => {
+    		if ('type' in $$props) $$invalidate(0, type = $$props.type);
+    		if ('caption' in $$props) $$invalidate(1, caption = $$props.caption);
+    		if ('href' in $$props) $$invalidate(2, href = $$props.href);
+    		if ('mode' in $$props) $$invalidate(3, mode = $$props.mode);
+    	};
+
+    	if ($$props && "$$inject" in $$props) {
+    		$$self.$inject_state($$props.$$inject);
+    	}
+
+    	return [type, caption, href, mode, click_handler];
+    }
+
+    class Button extends SvelteComponentDev {
+    	constructor(options) {
+    		super(options);
+    		init(this, options, instance$4, create_fragment$4, safe_not_equal, { type: 0, caption: 1, href: 2, mode: 3 });
+
+    		dispatch_dev("SvelteRegisterComponent", {
+    			component: this,
+    			tagName: "Button",
+    			options,
+    			id: create_fragment$4.name
+    		});
+    	}
+
+    	get type() {
+    		throw new Error("<Button>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set type(value) {
+    		throw new Error("<Button>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get caption() {
+    		throw new Error("<Button>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set caption(value) {
+    		throw new Error("<Button>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get href() {
+    		throw new Error("<Button>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set href(value) {
+    		throw new Error("<Button>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get mode() {
+    		throw new Error("<Button>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set mode(value) {
+    		throw new Error("<Button>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+    }
+
     /* src/Meetups/MeetupItem.svelte generated by Svelte v3.55.1 */
+    const file$3 = "src/Meetups/MeetupItem.svelte";
 
-    const file$2 = "src/Meetups/MeetupItem.svelte";
-
-    function create_fragment$2(ctx) {
+    function create_fragment$3(ctx) {
     	let article;
     	let header;
     	let h1;
-    	let t0_value = /*meetup*/ ctx[0].title + "";
     	let t0;
     	let t1;
     	let h2;
-    	let t2_value = /*meetup*/ ctx[0].subTitle + "";
     	let t2;
     	let t3;
     	let p0;
@@ -627,61 +833,85 @@ var app = (function () {
     	let t7;
     	let t8;
     	let footer;
-    	let a;
-    	let t9;
-    	let a_href_value;
-    	let t10;
     	let button0;
-    	let t12;
+    	let t9;
     	let button1;
+    	let t10;
+    	let button2;
+    	let current;
+
+    	button0 = new Button({
+    			props: {
+    				href: "mailto:" + /*email*/ ctx[6],
+    				caption: "Contact"
+    			},
+    			$$inline: true
+    		});
+
+    	button1 = new Button({
+    			props: {
+    				mode: "outline",
+    				type: "button",
+    				caption: /*isFav*/ ctx[7] ? 'Unfavorite' : 'Favorite'
+    			},
+    			$$inline: true
+    		});
+
+    	button1.$on("click", /*click_handler*/ ctx[9]);
+
+    	button2 = new Button({
+    			props: { type: "button", caption: "Show Details" },
+    			$$inline: true
+    		});
 
     	const block = {
     		c: function create() {
     			article = element("article");
     			header = element("header");
     			h1 = element("h1");
-    			t0 = text(t0_value);
+    			t0 = text(/*title*/ ctx[1]);
     			t1 = space();
     			h2 = element("h2");
-    			t2 = text(t2_value);
+    			t2 = text(/*subtitle*/ ctx[2]);
     			t3 = space();
     			p0 = element("p");
-    			t4 = text(/*address*/ ctx[4]);
+    			t4 = text(/*address*/ ctx[5]);
     			t5 = space();
     			div0 = element("div");
     			img = element("img");
     			t6 = space();
     			div1 = element("div");
     			p1 = element("p");
-    			t7 = text(/*description*/ ctx[3]);
+    			t7 = text(/*description*/ ctx[4]);
     			t8 = space();
     			footer = element("footer");
-    			a = element("a");
-    			t9 = text("Contact");
+    			create_component(button0.$$.fragment);
+    			t9 = space();
+    			create_component(button1.$$.fragment);
     			t10 = space();
-    			button0 = element("button");
-    			button0.textContent = "Show Details";
-    			t12 = space();
-    			button1 = element("button");
-    			button1.textContent = "Favorite";
-    			add_location(h1, file$2, 7, 8, 163);
-    			add_location(h2, file$2, 8, 8, 196);
-    			add_location(p0, file$2, 9, 8, 232);
-    			add_location(header, file$2, 6, 4, 146);
-    			if (!src_url_equal(img.src, img_src_value = /*imageUrl*/ ctx[2])) attr_dev(img, "src", img_src_value);
+    			create_component(button2.$$.fragment);
+    			attr_dev(h1, "class", "svelte-15xa3f5");
+    			add_location(h1, file$3, 76, 6, 1254);
+    			attr_dev(h2, "class", "svelte-15xa3f5");
+    			add_location(h2, file$3, 77, 6, 1277);
+    			attr_dev(p0, "class", "svelte-15xa3f5");
+    			add_location(p0, file$3, 78, 6, 1303);
+    			attr_dev(header, "class", "svelte-15xa3f5");
+    			add_location(header, file$3, 75, 4, 1239);
+    			if (!src_url_equal(img.src, img_src_value = /*imageUrl*/ ctx[3])) attr_dev(img, "src", img_src_value);
     			attr_dev(img, "alt", /*title*/ ctx[1]);
-    			add_location(img, file$2, 12, 8, 296);
-    			attr_dev(div0, "class", "image");
-    			add_location(div0, file$2, 11, 5, 268);
-    			add_location(p1, file$2, 15, 8, 380);
-    			attr_dev(div1, "class", "content");
-    			add_location(div1, file$2, 14, 5, 350);
-    			attr_dev(a, "href", a_href_value = "mailTo:" + /*contactEmail*/ ctx[5]);
-    			add_location(a, file$2, 19, 8, 437);
-    			add_location(button0, file$2, 20, 8, 489);
-    			add_location(button1, file$2, 21, 8, 527);
-    			add_location(footer, file$2, 18, 5, 419);
-    			add_location(article, file$2, 5, 0, 132);
+    			attr_dev(img, "class", "svelte-15xa3f5");
+    			add_location(img, file$3, 81, 6, 1364);
+    			attr_dev(div0, "class", "image svelte-15xa3f5");
+    			add_location(div0, file$3, 80, 4, 1338);
+    			attr_dev(p1, "class", "svelte-15xa3f5");
+    			add_location(p1, file$3, 84, 6, 1442);
+    			attr_dev(div1, "class", "content svelte-15xa3f5");
+    			add_location(div1, file$3, 83, 4, 1414);
+    			attr_dev(footer, "class", "svelte-15xa3f5");
+    			add_location(footer, file$3, 86, 4, 1478);
+    			attr_dev(article, "class", "svelte-15xa3f5");
+    			add_location(article, file$3, 74, 2, 1225);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -706,42 +936,58 @@ var app = (function () {
     			append_dev(p1, t7);
     			append_dev(article, t8);
     			append_dev(article, footer);
-    			append_dev(footer, a);
-    			append_dev(a, t9);
+    			mount_component(button0, footer, null);
+    			append_dev(footer, t9);
+    			mount_component(button1, footer, null);
     			append_dev(footer, t10);
-    			append_dev(footer, button0);
-    			append_dev(footer, t12);
-    			append_dev(footer, button1);
+    			mount_component(button2, footer, null);
+    			current = true;
     		},
     		p: function update(ctx, [dirty]) {
-    			if (dirty & /*meetup*/ 1 && t0_value !== (t0_value = /*meetup*/ ctx[0].title + "")) set_data_dev(t0, t0_value);
-    			if (dirty & /*meetup*/ 1 && t2_value !== (t2_value = /*meetup*/ ctx[0].subTitle + "")) set_data_dev(t2, t2_value);
-    			if (dirty & /*address*/ 16) set_data_dev(t4, /*address*/ ctx[4]);
+    			if (!current || dirty & /*title*/ 2) set_data_dev(t0, /*title*/ ctx[1]);
+    			if (!current || dirty & /*subtitle*/ 4) set_data_dev(t2, /*subtitle*/ ctx[2]);
+    			if (!current || dirty & /*address*/ 32) set_data_dev(t4, /*address*/ ctx[5]);
 
-    			if (dirty & /*imageUrl*/ 4 && !src_url_equal(img.src, img_src_value = /*imageUrl*/ ctx[2])) {
+    			if (!current || dirty & /*imageUrl*/ 8 && !src_url_equal(img.src, img_src_value = /*imageUrl*/ ctx[3])) {
     				attr_dev(img, "src", img_src_value);
     			}
 
-    			if (dirty & /*title*/ 2) {
+    			if (!current || dirty & /*title*/ 2) {
     				attr_dev(img, "alt", /*title*/ ctx[1]);
     			}
 
-    			if (dirty & /*description*/ 8) set_data_dev(t7, /*description*/ ctx[3]);
-
-    			if (dirty & /*contactEmail*/ 32 && a_href_value !== (a_href_value = "mailTo:" + /*contactEmail*/ ctx[5])) {
-    				attr_dev(a, "href", a_href_value);
-    			}
+    			if (!current || dirty & /*description*/ 16) set_data_dev(t7, /*description*/ ctx[4]);
+    			const button0_changes = {};
+    			if (dirty & /*email*/ 64) button0_changes.href = "mailto:" + /*email*/ ctx[6];
+    			button0.$set(button0_changes);
+    			const button1_changes = {};
+    			if (dirty & /*isFav*/ 128) button1_changes.caption = /*isFav*/ ctx[7] ? 'Unfavorite' : 'Favorite';
+    			button1.$set(button1_changes);
     		},
-    		i: noop,
-    		o: noop,
+    		i: function intro(local) {
+    			if (current) return;
+    			transition_in(button0.$$.fragment, local);
+    			transition_in(button1.$$.fragment, local);
+    			transition_in(button2.$$.fragment, local);
+    			current = true;
+    		},
+    		o: function outro(local) {
+    			transition_out(button0.$$.fragment, local);
+    			transition_out(button1.$$.fragment, local);
+    			transition_out(button2.$$.fragment, local);
+    			current = false;
+    		},
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(article);
+    			destroy_component(button0);
+    			destroy_component(button1);
+    			destroy_component(button2);
     		}
     	};
 
     	dispatch_dev("SvelteRegisterBlock", {
     		block,
-    		id: create_fragment$2.name,
+    		id: create_fragment$3.name,
     		type: "component",
     		source: "",
     		ctx
@@ -750,97 +996,152 @@ var app = (function () {
     	return block;
     }
 
-    function instance$2($$self, $$props, $$invalidate) {
+    function instance$3($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('MeetupItem', slots, []);
-    	let { meetup } = $$props;
-    	let { title: title_1, subTitle: subTitle_1, imageUrl: imageUrl_1, description: description_1, address: address_1, contactEmail: contactEmail_1 } = meetup;
-    	let { title = title_1, subTitle = subTitle_1, imageUrl = imageUrl_1, description = description_1, address = address_1, contactEmail = contactEmail_1 } = $$props;
+    	let { id } = $$props;
+    	let { title } = $$props;
+    	let { subtitle } = $$props;
+    	let { imageUrl } = $$props;
+    	let { description } = $$props;
+    	let { address } = $$props;
+    	let { email } = $$props;
+    	let { isFav } = $$props;
+    	const dispatch = createEventDispatcher();
 
     	$$self.$$.on_mount.push(function () {
-    		if (meetup === undefined && !('meetup' in $$props || $$self.$$.bound[$$self.$$.props['meetup']])) {
-    			console.warn("<MeetupItem> was created without expected prop 'meetup'");
+    		if (id === undefined && !('id' in $$props || $$self.$$.bound[$$self.$$.props['id']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'id'");
+    		}
+
+    		if (title === undefined && !('title' in $$props || $$self.$$.bound[$$self.$$.props['title']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'title'");
+    		}
+
+    		if (subtitle === undefined && !('subtitle' in $$props || $$self.$$.bound[$$self.$$.props['subtitle']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'subtitle'");
+    		}
+
+    		if (imageUrl === undefined && !('imageUrl' in $$props || $$self.$$.bound[$$self.$$.props['imageUrl']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'imageUrl'");
+    		}
+
+    		if (description === undefined && !('description' in $$props || $$self.$$.bound[$$self.$$.props['description']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'description'");
+    		}
+
+    		if (address === undefined && !('address' in $$props || $$self.$$.bound[$$self.$$.props['address']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'address'");
+    		}
+
+    		if (email === undefined && !('email' in $$props || $$self.$$.bound[$$self.$$.props['email']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'email'");
+    		}
+
+    		if (isFav === undefined && !('isFav' in $$props || $$self.$$.bound[$$self.$$.props['isFav']])) {
+    			console.warn("<MeetupItem> was created without expected prop 'isFav'");
     		}
     	});
 
     	const writable_props = [
-    		'meetup',
+    		'id',
     		'title',
-    		'subTitle',
+    		'subtitle',
     		'imageUrl',
     		'description',
     		'address',
-    		'contactEmail'
+    		'email',
+    		'isFav'
     	];
 
     	Object.keys($$props).forEach(key => {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<MeetupItem> was created with unknown prop '${key}'`);
     	});
 
+    	const click_handler = () => dispatch('togglefavorite', id);
+
     	$$self.$$set = $$props => {
-    		if ('meetup' in $$props) $$invalidate(0, meetup = $$props.meetup);
+    		if ('id' in $$props) $$invalidate(0, id = $$props.id);
     		if ('title' in $$props) $$invalidate(1, title = $$props.title);
-    		if ('subTitle' in $$props) $$invalidate(6, subTitle = $$props.subTitle);
-    		if ('imageUrl' in $$props) $$invalidate(2, imageUrl = $$props.imageUrl);
-    		if ('description' in $$props) $$invalidate(3, description = $$props.description);
-    		if ('address' in $$props) $$invalidate(4, address = $$props.address);
-    		if ('contactEmail' in $$props) $$invalidate(5, contactEmail = $$props.contactEmail);
+    		if ('subtitle' in $$props) $$invalidate(2, subtitle = $$props.subtitle);
+    		if ('imageUrl' in $$props) $$invalidate(3, imageUrl = $$props.imageUrl);
+    		if ('description' in $$props) $$invalidate(4, description = $$props.description);
+    		if ('address' in $$props) $$invalidate(5, address = $$props.address);
+    		if ('email' in $$props) $$invalidate(6, email = $$props.email);
+    		if ('isFav' in $$props) $$invalidate(7, isFav = $$props.isFav);
     	};
 
     	$$self.$capture_state = () => ({
-    		meetup,
+    		createEventDispatcher,
+    		Button,
+    		id,
     		title,
-    		subTitle,
+    		subtitle,
     		imageUrl,
     		description,
     		address,
-    		contactEmail
+    		email,
+    		isFav,
+    		dispatch
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ('meetup' in $$props) $$invalidate(0, meetup = $$props.meetup);
+    		if ('id' in $$props) $$invalidate(0, id = $$props.id);
     		if ('title' in $$props) $$invalidate(1, title = $$props.title);
-    		if ('subTitle' in $$props) $$invalidate(6, subTitle = $$props.subTitle);
-    		if ('imageUrl' in $$props) $$invalidate(2, imageUrl = $$props.imageUrl);
-    		if ('description' in $$props) $$invalidate(3, description = $$props.description);
-    		if ('address' in $$props) $$invalidate(4, address = $$props.address);
-    		if ('contactEmail' in $$props) $$invalidate(5, contactEmail = $$props.contactEmail);
+    		if ('subtitle' in $$props) $$invalidate(2, subtitle = $$props.subtitle);
+    		if ('imageUrl' in $$props) $$invalidate(3, imageUrl = $$props.imageUrl);
+    		if ('description' in $$props) $$invalidate(4, description = $$props.description);
+    		if ('address' in $$props) $$invalidate(5, address = $$props.address);
+    		if ('email' in $$props) $$invalidate(6, email = $$props.email);
+    		if ('isFav' in $$props) $$invalidate(7, isFav = $$props.isFav);
     	};
 
     	if ($$props && "$$inject" in $$props) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [meetup, title, imageUrl, description, address, contactEmail, subTitle];
+    	return [
+    		id,
+    		title,
+    		subtitle,
+    		imageUrl,
+    		description,
+    		address,
+    		email,
+    		isFav,
+    		dispatch,
+    		click_handler
+    	];
     }
 
     class MeetupItem extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
 
-    		init(this, options, instance$2, create_fragment$2, safe_not_equal, {
-    			meetup: 0,
+    		init(this, options, instance$3, create_fragment$3, safe_not_equal, {
+    			id: 0,
     			title: 1,
-    			subTitle: 6,
-    			imageUrl: 2,
-    			description: 3,
-    			address: 4,
-    			contactEmail: 5
+    			subtitle: 2,
+    			imageUrl: 3,
+    			description: 4,
+    			address: 5,
+    			email: 6,
+    			isFav: 7
     		});
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
     			tagName: "MeetupItem",
     			options,
-    			id: create_fragment$2.name
+    			id: create_fragment$3.name
     		});
     	}
 
-    	get meetup() {
+    	get id() {
     		throw new Error("<MeetupItem>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
-    	set meetup(value) {
+    	set id(value) {
     		throw new Error("<MeetupItem>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
@@ -852,11 +1153,11 @@ var app = (function () {
     		throw new Error("<MeetupItem>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
-    	get subTitle() {
+    	get subtitle() {
     		throw new Error("<MeetupItem>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
-    	set subTitle(value) {
+    	set subtitle(value) {
     		throw new Error("<MeetupItem>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
@@ -884,52 +1185,71 @@ var app = (function () {
     		throw new Error("<MeetupItem>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
-    	get contactEmail() {
+    	get email() {
     		throw new Error("<MeetupItem>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
-    	set contactEmail(value) {
+    	set email(value) {
+    		throw new Error("<MeetupItem>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get isFav() {
+    		throw new Error("<MeetupItem>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set isFav(value) {
     		throw new Error("<MeetupItem>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
     }
 
     /* src/Meetups/MeetupGrid.svelte generated by Svelte v3.55.1 */
-    const file$1 = "src/Meetups/MeetupGrid.svelte";
+    const file$2 = "src/Meetups/MeetupGrid.svelte";
 
     function get_each_context(ctx, list, i) {
     	const child_ctx = ctx.slice();
-    	child_ctx[1] = list[i];
+    	child_ctx[2] = list[i];
     	return child_ctx;
     }
 
-    // (23:4) {#each  meetups as meetup (meetup.id)}
-    function create_each_block(key_1, ctx) {
-    	let first;
+    // (23:4) {#each meetups as meetup}
+    function create_each_block(ctx) {
     	let meetupitem;
     	let current;
 
     	meetupitem = new MeetupItem({
-    			props: { meetup: /*meetup*/ ctx[1] },
+    			props: {
+    				id: /*meetup*/ ctx[2].id,
+    				title: /*meetup*/ ctx[2].title,
+    				subtitle: /*meetup*/ ctx[2].subtitle,
+    				description: /*meetup*/ ctx[2].description,
+    				imageUrl: /*meetup*/ ctx[2].imageUrl,
+    				email: /*meetup*/ ctx[2].contactEmail,
+    				address: /*meetup*/ ctx[2].address,
+    				isFav: /*meetup*/ ctx[2].isFavorite
+    			},
     			$$inline: true
     		});
 
+    	meetupitem.$on("togglefavorite", /*togglefavorite_handler*/ ctx[1]);
+
     	const block = {
-    		key: key_1,
-    		first: null,
     		c: function create() {
-    			first = empty();
     			create_component(meetupitem.$$.fragment);
-    			this.first = first;
     		},
     		m: function mount(target, anchor) {
-    			insert_dev(target, first, anchor);
     			mount_component(meetupitem, target, anchor);
     			current = true;
     		},
-    		p: function update(new_ctx, dirty) {
-    			ctx = new_ctx;
+    		p: function update(ctx, dirty) {
     			const meetupitem_changes = {};
-    			if (dirty & /*meetups*/ 1) meetupitem_changes.meetup = /*meetup*/ ctx[1];
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.id = /*meetup*/ ctx[2].id;
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.title = /*meetup*/ ctx[2].title;
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.subtitle = /*meetup*/ ctx[2].subtitle;
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.description = /*meetup*/ ctx[2].description;
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.imageUrl = /*meetup*/ ctx[2].imageUrl;
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.email = /*meetup*/ ctx[2].contactEmail;
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.address = /*meetup*/ ctx[2].address;
+    			if (dirty & /*meetups*/ 1) meetupitem_changes.isFav = /*meetup*/ ctx[2].isFavorite;
     			meetupitem.$set(meetupitem_changes);
     		},
     		i: function intro(local) {
@@ -942,7 +1262,6 @@ var app = (function () {
     			current = false;
     		},
     		d: function destroy(detaching) {
-    			if (detaching) detach_dev(first);
     			destroy_component(meetupitem, detaching);
     		}
     	};
@@ -951,28 +1270,27 @@ var app = (function () {
     		block,
     		id: create_each_block.name,
     		type: "each",
-    		source: "(23:4) {#each  meetups as meetup (meetup.id)}",
+    		source: "(23:4) {#each meetups as meetup}",
     		ctx
     	});
 
     	return block;
     }
 
-    function create_fragment$1(ctx) {
+    function create_fragment$2(ctx) {
     	let section;
-    	let each_blocks = [];
-    	let each_1_lookup = new Map();
     	let current;
     	let each_value = /*meetups*/ ctx[0];
     	validate_each_argument(each_value);
-    	const get_key = ctx => /*meetup*/ ctx[1].id;
-    	validate_each_keys(ctx, each_value, get_each_context, get_key);
+    	let each_blocks = [];
 
     	for (let i = 0; i < each_value.length; i += 1) {
-    		let child_ctx = get_each_context(ctx, each_value, i);
-    		let key = get_key(child_ctx);
-    		each_1_lookup.set(key, each_blocks[i] = create_each_block(key, child_ctx));
+    		each_blocks[i] = create_each_block(get_each_context(ctx, each_value, i));
     	}
+
+    	const out = i => transition_out(each_blocks[i], 1, 1, () => {
+    		each_blocks[i] = null;
+    	});
 
     	const block = {
     		c: function create() {
@@ -983,8 +1301,8 @@ var app = (function () {
     			}
 
     			attr_dev(section, "id", "meetups");
-    			attr_dev(section, "class", "svelte-7iyw6p");
-    			add_location(section, file$1, 21, 0, 355);
+    			attr_dev(section, "class", "svelte-rr4vld");
+    			add_location(section, file$2, 21, 2, 355);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -1002,9 +1320,28 @@ var app = (function () {
     			if (dirty & /*meetups*/ 1) {
     				each_value = /*meetups*/ ctx[0];
     				validate_each_argument(each_value);
+    				let i;
+
+    				for (i = 0; i < each_value.length; i += 1) {
+    					const child_ctx = get_each_context(ctx, each_value, i);
+
+    					if (each_blocks[i]) {
+    						each_blocks[i].p(child_ctx, dirty);
+    						transition_in(each_blocks[i], 1);
+    					} else {
+    						each_blocks[i] = create_each_block(child_ctx);
+    						each_blocks[i].c();
+    						transition_in(each_blocks[i], 1);
+    						each_blocks[i].m(section, null);
+    					}
+    				}
+
     				group_outros();
-    				validate_each_keys(ctx, each_value, get_each_context, get_key);
-    				each_blocks = update_keyed_each(each_blocks, dirty, get_key, 1, ctx, each_value, each_1_lookup, section, outro_and_destroy_block, create_each_block, null, get_each_context);
+
+    				for (i = each_value.length; i < each_blocks.length; i += 1) {
+    					out(i);
+    				}
+
     				check_outros();
     			}
     		},
@@ -1018,6 +1355,8 @@ var app = (function () {
     			current = true;
     		},
     		o: function outro(local) {
+    			each_blocks = each_blocks.filter(Boolean);
+
     			for (let i = 0; i < each_blocks.length; i += 1) {
     				transition_out(each_blocks[i]);
     			}
@@ -1026,16 +1365,13 @@ var app = (function () {
     		},
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(section);
-
-    			for (let i = 0; i < each_blocks.length; i += 1) {
-    				each_blocks[i].d();
-    			}
+    			destroy_each(each_blocks, detaching);
     		}
     	};
 
     	dispatch_dev("SvelteRegisterBlock", {
     		block,
-    		id: create_fragment$1.name,
+    		id: create_fragment$2.name,
     		type: "component",
     		source: "",
     		ctx
@@ -1044,7 +1380,7 @@ var app = (function () {
     	return block;
     }
 
-    function instance$1($$self, $$props, $$invalidate) {
+    function instance$2($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('MeetupGrid', slots, []);
     	let { meetups } = $$props;
@@ -1061,6 +1397,10 @@ var app = (function () {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<MeetupGrid> was created with unknown prop '${key}'`);
     	});
 
+    	function togglefavorite_handler(event) {
+    		bubble.call(this, $$self, event);
+    	}
+
     	$$self.$$set = $$props => {
     		if ('meetups' in $$props) $$invalidate(0, meetups = $$props.meetups);
     	};
@@ -1075,19 +1415,19 @@ var app = (function () {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [meetups];
+    	return [meetups, togglefavorite_handler];
     }
 
     class MeetupGrid extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$1, create_fragment$1, safe_not_equal, { meetups: 0 });
+    		init(this, options, instance$2, create_fragment$2, safe_not_equal, { meetups: 0 });
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
     			tagName: "MeetupGrid",
     			options,
-    			id: create_fragment$1.name
+    			id: create_fragment$2.name
     		});
     	}
 
@@ -1100,6 +1440,316 @@ var app = (function () {
     	}
     }
 
+    /* src/UI/TextInput.svelte generated by Svelte v3.55.1 */
+
+    const file$1 = "src/UI/TextInput.svelte";
+
+    // (45:4) {:else}
+    function create_else_block(ctx) {
+    	let input;
+    	let mounted;
+    	let dispose;
+
+    	const block = {
+    		c: function create() {
+    			input = element("input");
+    			attr_dev(input, "type", /*controlType*/ ctx[0]);
+    			attr_dev(input, "id", /*id*/ ctx[1]);
+    			input.value = /*value*/ ctx[4];
+    			attr_dev(input, "class", "svelte-l9ewvz");
+    			add_location(input, file$1, 45, 8, 887);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, input, anchor);
+
+    			if (!mounted) {
+    				dispose = listen_dev(input, "input", /*input_handler_1*/ ctx[6], false, false, false);
+    				mounted = true;
+    			}
+    		},
+    		p: function update(ctx, dirty) {
+    			if (dirty & /*controlType*/ 1) {
+    				attr_dev(input, "type", /*controlType*/ ctx[0]);
+    			}
+
+    			if (dirty & /*id*/ 2) {
+    				attr_dev(input, "id", /*id*/ ctx[1]);
+    			}
+
+    			if (dirty & /*value*/ 16 && input.value !== /*value*/ ctx[4]) {
+    				prop_dev(input, "value", /*value*/ ctx[4]);
+    			}
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(input);
+    			mounted = false;
+    			dispose();
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_else_block.name,
+    		type: "else",
+    		source: "(45:4) {:else}",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    // (43:4) {#if controlType === 'textarea'}
+    function create_if_block(ctx) {
+    	let textarea;
+    	let mounted;
+    	let dispose;
+
+    	const block = {
+    		c: function create() {
+    			textarea = element("textarea");
+    			attr_dev(textarea, "rows", /*rows*/ ctx[3]);
+    			attr_dev(textarea, "id", /*id*/ ctx[1]);
+    			textarea.value = /*value*/ ctx[4];
+    			attr_dev(textarea, "class", "svelte-l9ewvz");
+    			add_location(textarea, file$1, 43, 8, 807);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, textarea, anchor);
+
+    			if (!mounted) {
+    				dispose = listen_dev(textarea, "input", /*input_handler*/ ctx[5], false, false, false);
+    				mounted = true;
+    			}
+    		},
+    		p: function update(ctx, dirty) {
+    			if (dirty & /*rows*/ 8) {
+    				attr_dev(textarea, "rows", /*rows*/ ctx[3]);
+    			}
+
+    			if (dirty & /*id*/ 2) {
+    				attr_dev(textarea, "id", /*id*/ ctx[1]);
+    			}
+
+    			if (dirty & /*value*/ 16) {
+    				prop_dev(textarea, "value", /*value*/ ctx[4]);
+    			}
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(textarea);
+    			mounted = false;
+    			dispose();
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_if_block.name,
+    		type: "if",
+    		source: "(43:4) {#if controlType === 'textarea'}",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function create_fragment$1(ctx) {
+    	let div;
+    	let label_1;
+    	let t0;
+    	let t1;
+
+    	function select_block_type(ctx, dirty) {
+    		if (/*controlType*/ ctx[0] === 'textarea') return create_if_block;
+    		return create_else_block;
+    	}
+
+    	let current_block_type = select_block_type(ctx);
+    	let if_block = current_block_type(ctx);
+
+    	const block = {
+    		c: function create() {
+    			div = element("div");
+    			label_1 = element("label");
+    			t0 = text(/*label*/ ctx[2]);
+    			t1 = space();
+    			if_block.c();
+    			attr_dev(label_1, "for", /*id*/ ctx[1]);
+    			attr_dev(label_1, "class", "svelte-l9ewvz");
+    			add_location(label_1, file$1, 41, 4, 728);
+    			attr_dev(div, "class", "form-control svelte-l9ewvz");
+    			add_location(div, file$1, 40, 0, 697);
+    		},
+    		l: function claim(nodes) {
+    			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, div, anchor);
+    			append_dev(div, label_1);
+    			append_dev(label_1, t0);
+    			append_dev(div, t1);
+    			if_block.m(div, null);
+    		},
+    		p: function update(ctx, [dirty]) {
+    			if (dirty & /*label*/ 4) set_data_dev(t0, /*label*/ ctx[2]);
+
+    			if (dirty & /*id*/ 2) {
+    				attr_dev(label_1, "for", /*id*/ ctx[1]);
+    			}
+
+    			if (current_block_type === (current_block_type = select_block_type(ctx)) && if_block) {
+    				if_block.p(ctx, dirty);
+    			} else {
+    				if_block.d(1);
+    				if_block = current_block_type(ctx);
+
+    				if (if_block) {
+    					if_block.c();
+    					if_block.m(div, null);
+    				}
+    			}
+    		},
+    		i: noop,
+    		o: noop,
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(div);
+    			if_block.d();
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_fragment$1.name,
+    		type: "component",
+    		source: "",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function instance$1($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('TextInput', slots, []);
+    	let { controlType = null } = $$props;
+    	let { id } = $$props;
+    	let { label } = $$props;
+    	let { rows = null } = $$props;
+    	let { value } = $$props;
+
+    	$$self.$$.on_mount.push(function () {
+    		if (id === undefined && !('id' in $$props || $$self.$$.bound[$$self.$$.props['id']])) {
+    			console.warn("<TextInput> was created without expected prop 'id'");
+    		}
+
+    		if (label === undefined && !('label' in $$props || $$self.$$.bound[$$self.$$.props['label']])) {
+    			console.warn("<TextInput> was created without expected prop 'label'");
+    		}
+
+    		if (value === undefined && !('value' in $$props || $$self.$$.bound[$$self.$$.props['value']])) {
+    			console.warn("<TextInput> was created without expected prop 'value'");
+    		}
+    	});
+
+    	const writable_props = ['controlType', 'id', 'label', 'rows', 'value'];
+
+    	Object.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<TextInput> was created with unknown prop '${key}'`);
+    	});
+
+    	function input_handler(event) {
+    		bubble.call(this, $$self, event);
+    	}
+
+    	function input_handler_1(event) {
+    		bubble.call(this, $$self, event);
+    	}
+
+    	$$self.$$set = $$props => {
+    		if ('controlType' in $$props) $$invalidate(0, controlType = $$props.controlType);
+    		if ('id' in $$props) $$invalidate(1, id = $$props.id);
+    		if ('label' in $$props) $$invalidate(2, label = $$props.label);
+    		if ('rows' in $$props) $$invalidate(3, rows = $$props.rows);
+    		if ('value' in $$props) $$invalidate(4, value = $$props.value);
+    	};
+
+    	$$self.$capture_state = () => ({ controlType, id, label, rows, value });
+
+    	$$self.$inject_state = $$props => {
+    		if ('controlType' in $$props) $$invalidate(0, controlType = $$props.controlType);
+    		if ('id' in $$props) $$invalidate(1, id = $$props.id);
+    		if ('label' in $$props) $$invalidate(2, label = $$props.label);
+    		if ('rows' in $$props) $$invalidate(3, rows = $$props.rows);
+    		if ('value' in $$props) $$invalidate(4, value = $$props.value);
+    	};
+
+    	if ($$props && "$$inject" in $$props) {
+    		$$self.$inject_state($$props.$$inject);
+    	}
+
+    	return [controlType, id, label, rows, value, input_handler, input_handler_1];
+    }
+
+    class TextInput extends SvelteComponentDev {
+    	constructor(options) {
+    		super(options);
+
+    		init(this, options, instance$1, create_fragment$1, safe_not_equal, {
+    			controlType: 0,
+    			id: 1,
+    			label: 2,
+    			rows: 3,
+    			value: 4
+    		});
+
+    		dispatch_dev("SvelteRegisterComponent", {
+    			component: this,
+    			tagName: "TextInput",
+    			options,
+    			id: create_fragment$1.name
+    		});
+    	}
+
+    	get controlType() {
+    		throw new Error("<TextInput>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set controlType(value) {
+    		throw new Error("<TextInput>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get id() {
+    		throw new Error("<TextInput>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set id(value) {
+    		throw new Error("<TextInput>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get label() {
+    		throw new Error("<TextInput>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set label(value) {
+    		throw new Error("<TextInput>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get rows() {
+    		throw new Error("<TextInput>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set rows(value) {
+    		throw new Error("<TextInput>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get value() {
+    		throw new Error("<TextInput>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set value(value) {
+    		throw new Error("<TextInput>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+    }
+
     /* src/App.svelte generated by Svelte v3.55.1 */
     const file = "src/App.svelte";
 
@@ -1108,48 +1758,105 @@ var app = (function () {
     	let t0;
     	let main;
     	let form;
-    	let div0;
-    	let label0;
+    	let textinput0;
+    	let t1;
+    	let textinput1;
     	let t2;
-    	let input0;
+    	let textinput2;
     	let t3;
-    	let div1;
-    	let label1;
+    	let textinput3;
+    	let t4;
+    	let textinput4;
     	let t5;
-    	let input1;
+    	let textinput5;
     	let t6;
-    	let div2;
-    	let label2;
-    	let t8;
-    	let input2;
-    	let t9;
-    	let div3;
-    	let label3;
-    	let t11;
-    	let input3;
-    	let t12;
-    	let div4;
-    	let label4;
-    	let t14;
-    	let input4;
-    	let t15;
-    	let div5;
-    	let label5;
-    	let t17;
-    	let textarea;
-    	let t18;
     	let button;
-    	let t20;
+    	let t7;
     	let meetupgrid;
     	let current;
     	let mounted;
     	let dispose;
     	header = new Header({ $$inline: true });
 
+    	textinput0 = new TextInput({
+    			props: {
+    				id: "title",
+    				label: "Title",
+    				value: /*title*/ ctx[0]
+    			},
+    			$$inline: true
+    		});
+
+    	textinput0.$on("input", /*input_handler*/ ctx[9]);
+
+    	textinput1 = new TextInput({
+    			props: {
+    				id: "subtitle",
+    				label: "Subtitle",
+    				value: /*subtitle*/ ctx[1]
+    			},
+    			$$inline: true
+    		});
+
+    	textinput1.$on("input", /*input_handler_1*/ ctx[10]);
+
+    	textinput2 = new TextInput({
+    			props: {
+    				id: "address",
+    				label: "Address",
+    				value: /*address*/ ctx[2]
+    			},
+    			$$inline: true
+    		});
+
+    	textinput2.$on("input", /*input_handler_2*/ ctx[11]);
+
+    	textinput3 = new TextInput({
+    			props: {
+    				id: "imageUrl",
+    				label: "Image URL",
+    				value: /*imageUrl*/ ctx[5]
+    			},
+    			$$inline: true
+    		});
+
+    	textinput3.$on("input", /*input_handler_3*/ ctx[12]);
+
+    	textinput4 = new TextInput({
+    			props: {
+    				id: "email",
+    				label: "E-Mail",
+    				type: "email",
+    				value: /*email*/ ctx[3]
+    			},
+    			$$inline: true
+    		});
+
+    	textinput4.$on("input", /*input_handler_4*/ ctx[13]);
+
+    	textinput5 = new TextInput({
+    			props: {
+    				id: "description",
+    				label: "Description",
+    				controlType: "textarea",
+    				value: /*description*/ ctx[4]
+    			},
+    			$$inline: true
+    		});
+
+    	textinput5.$on("input", /*input_handler_5*/ ctx[14]);
+
+    	button = new Button({
+    			props: { type: "submit", caption: "Save" },
+    			$$inline: true
+    		});
+
     	meetupgrid = new MeetupGrid({
     			props: { meetups: /*meetups*/ ctx[6] },
     			$$inline: true
     		});
+
+    	meetupgrid.$on("togglefavorite", /*toggleFavorite*/ ctx[8]);
 
     	const block = {
     		c: function create() {
@@ -1157,93 +1864,25 @@ var app = (function () {
     			t0 = space();
     			main = element("main");
     			form = element("form");
-    			div0 = element("div");
-    			label0 = element("label");
-    			label0.textContent = "Title";
+    			create_component(textinput0.$$.fragment);
+    			t1 = space();
+    			create_component(textinput1.$$.fragment);
     			t2 = space();
-    			input0 = element("input");
+    			create_component(textinput2.$$.fragment);
     			t3 = space();
-    			div1 = element("div");
-    			label1 = element("label");
-    			label1.textContent = "subTitle";
+    			create_component(textinput3.$$.fragment);
+    			t4 = space();
+    			create_component(textinput4.$$.fragment);
     			t5 = space();
-    			input1 = element("input");
+    			create_component(textinput5.$$.fragment);
     			t6 = space();
-    			div2 = element("div");
-    			label2 = element("label");
-    			label2.textContent = "address";
-    			t8 = space();
-    			input2 = element("input");
-    			t9 = space();
-    			div3 = element("div");
-    			label3 = element("label");
-    			label3.textContent = "imageUrl";
-    			t11 = space();
-    			input3 = element("input");
-    			t12 = space();
-    			div4 = element("div");
-    			label4 = element("label");
-    			label4.textContent = "email";
-    			t14 = space();
-    			input4 = element("input");
-    			t15 = space();
-    			div5 = element("div");
-    			label5 = element("label");
-    			label5.textContent = "description";
-    			t17 = space();
-    			textarea = element("textarea");
-    			t18 = space();
-    			button = element("button");
-    			button.textContent = "Save";
-    			t20 = space();
+    			create_component(button.$$.fragment);
+    			t7 = space();
     			create_component(meetupgrid.$$.fragment);
-    			attr_dev(label0, "for", "title");
-    			add_location(label0, file, 81, 12, 2045);
-    			attr_dev(input0, "type", "text");
-    			attr_dev(input0, "id", "title");
-    			add_location(input0, file, 82, 12, 2090);
-    			attr_dev(div0, "class", "form-control");
-    			add_location(div0, file, 80, 8, 2006);
-    			attr_dev(label1, "for", "title");
-    			add_location(label1, file, 85, 12, 2202);
-    			attr_dev(input1, "type", "text");
-    			attr_dev(input1, "id", "subTitle");
-    			add_location(input1, file, 86, 12, 2250);
-    			attr_dev(div1, "class", "form-control");
-    			add_location(div1, file, 84, 8, 2163);
-    			attr_dev(label2, "for", "address");
-    			add_location(label2, file, 89, 12, 2368);
-    			attr_dev(input2, "type", "text");
-    			attr_dev(input2, "id", "address");
-    			add_location(input2, file, 90, 12, 2417);
-    			attr_dev(div2, "class", "form-control");
-    			add_location(div2, file, 88, 8, 2329);
-    			attr_dev(label3, "for", "imageUrl");
-    			add_location(label3, file, 93, 12, 2533);
-    			attr_dev(input3, "type", "text");
-    			attr_dev(input3, "id", "imageUrl");
-    			add_location(input3, file, 94, 12, 2584);
-    			attr_dev(div3, "class", "form-control");
-    			add_location(div3, file, 92, 8, 2494);
-    			attr_dev(label4, "for", "email");
-    			add_location(label4, file, 97, 12, 2702);
-    			attr_dev(input4, "type", "email");
-    			attr_dev(input4, "id", "email");
-    			add_location(input4, file, 98, 12, 2747);
-    			attr_dev(div4, "class", "form-control");
-    			add_location(div4, file, 96, 8, 2663);
-    			attr_dev(label5, "for", "description");
-    			add_location(label5, file, 101, 12, 2860);
-    			attr_dev(textarea, "rows", "3");
-    			attr_dev(textarea, "id", "description");
-    			add_location(textarea, file, 102, 12, 2917);
-    			attr_dev(div5, "class", "form-control");
-    			add_location(div5, file, 100, 8, 2821);
-    			attr_dev(button, "type", "submit");
-    			add_location(button, file, 104, 8, 3003);
-    			add_location(form, file, 79, 4, 1954);
-    			attr_dev(main, "class", "svelte-r5b0o4");
-    			add_location(main, file, 78, 0, 1943);
+    			attr_dev(form, "class", "svelte-17wknp8");
+    			add_location(form, file, 80, 4, 2372);
+    			attr_dev(main, "class", "svelte-17wknp8");
+    			add_location(main, file, 79, 2, 2361);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -1253,86 +1892,47 @@ var app = (function () {
     			insert_dev(target, t0, anchor);
     			insert_dev(target, main, anchor);
     			append_dev(main, form);
-    			append_dev(form, div0);
-    			append_dev(div0, label0);
-    			append_dev(div0, t2);
-    			append_dev(div0, input0);
-    			set_input_value(input0, /*title*/ ctx[0]);
+    			mount_component(textinput0, form, null);
+    			append_dev(form, t1);
+    			mount_component(textinput1, form, null);
+    			append_dev(form, t2);
+    			mount_component(textinput2, form, null);
     			append_dev(form, t3);
-    			append_dev(form, div1);
-    			append_dev(div1, label1);
-    			append_dev(div1, t5);
-    			append_dev(div1, input1);
-    			set_input_value(input1, /*subTitle*/ ctx[1]);
+    			mount_component(textinput3, form, null);
+    			append_dev(form, t4);
+    			mount_component(textinput4, form, null);
+    			append_dev(form, t5);
+    			mount_component(textinput5, form, null);
     			append_dev(form, t6);
-    			append_dev(form, div2);
-    			append_dev(div2, label2);
-    			append_dev(div2, t8);
-    			append_dev(div2, input2);
-    			set_input_value(input2, /*address*/ ctx[2]);
-    			append_dev(form, t9);
-    			append_dev(form, div3);
-    			append_dev(div3, label3);
-    			append_dev(div3, t11);
-    			append_dev(div3, input3);
-    			set_input_value(input3, /*imageUrl*/ ctx[5]);
-    			append_dev(form, t12);
-    			append_dev(form, div4);
-    			append_dev(div4, label4);
-    			append_dev(div4, t14);
-    			append_dev(div4, input4);
-    			set_input_value(input4, /*email*/ ctx[3]);
-    			append_dev(form, t15);
-    			append_dev(form, div5);
-    			append_dev(div5, label5);
-    			append_dev(div5, t17);
-    			append_dev(div5, textarea);
-    			set_input_value(textarea, /*description*/ ctx[4]);
-    			append_dev(form, t18);
-    			append_dev(form, button);
-    			append_dev(main, t20);
+    			mount_component(button, form, null);
+    			append_dev(main, t7);
     			mount_component(meetupgrid, main, null);
     			current = true;
 
     			if (!mounted) {
-    				dispose = [
-    					listen_dev(input0, "input", /*input0_input_handler*/ ctx[8]),
-    					listen_dev(input1, "input", /*input1_input_handler*/ ctx[9]),
-    					listen_dev(input2, "input", /*input2_input_handler*/ ctx[10]),
-    					listen_dev(input3, "input", /*input3_input_handler*/ ctx[11]),
-    					listen_dev(input4, "input", /*input4_input_handler*/ ctx[12]),
-    					listen_dev(textarea, "input", /*textarea_input_handler*/ ctx[13]),
-    					listen_dev(form, "submit", prevent_default(/*addMeetup*/ ctx[7]), false, true, false)
-    				];
-
+    				dispose = listen_dev(form, "submit", prevent_default(/*addMeetup*/ ctx[7]), false, true, false);
     				mounted = true;
     			}
     		},
     		p: function update(ctx, [dirty]) {
-    			if (dirty & /*title*/ 1 && input0.value !== /*title*/ ctx[0]) {
-    				set_input_value(input0, /*title*/ ctx[0]);
-    			}
-
-    			if (dirty & /*subTitle*/ 2 && input1.value !== /*subTitle*/ ctx[1]) {
-    				set_input_value(input1, /*subTitle*/ ctx[1]);
-    			}
-
-    			if (dirty & /*address*/ 4 && input2.value !== /*address*/ ctx[2]) {
-    				set_input_value(input2, /*address*/ ctx[2]);
-    			}
-
-    			if (dirty & /*imageUrl*/ 32 && input3.value !== /*imageUrl*/ ctx[5]) {
-    				set_input_value(input3, /*imageUrl*/ ctx[5]);
-    			}
-
-    			if (dirty & /*email*/ 8 && input4.value !== /*email*/ ctx[3]) {
-    				set_input_value(input4, /*email*/ ctx[3]);
-    			}
-
-    			if (dirty & /*description*/ 16) {
-    				set_input_value(textarea, /*description*/ ctx[4]);
-    			}
-
+    			const textinput0_changes = {};
+    			if (dirty & /*title*/ 1) textinput0_changes.value = /*title*/ ctx[0];
+    			textinput0.$set(textinput0_changes);
+    			const textinput1_changes = {};
+    			if (dirty & /*subtitle*/ 2) textinput1_changes.value = /*subtitle*/ ctx[1];
+    			textinput1.$set(textinput1_changes);
+    			const textinput2_changes = {};
+    			if (dirty & /*address*/ 4) textinput2_changes.value = /*address*/ ctx[2];
+    			textinput2.$set(textinput2_changes);
+    			const textinput3_changes = {};
+    			if (dirty & /*imageUrl*/ 32) textinput3_changes.value = /*imageUrl*/ ctx[5];
+    			textinput3.$set(textinput3_changes);
+    			const textinput4_changes = {};
+    			if (dirty & /*email*/ 8) textinput4_changes.value = /*email*/ ctx[3];
+    			textinput4.$set(textinput4_changes);
+    			const textinput5_changes = {};
+    			if (dirty & /*description*/ 16) textinput5_changes.value = /*description*/ ctx[4];
+    			textinput5.$set(textinput5_changes);
     			const meetupgrid_changes = {};
     			if (dirty & /*meetups*/ 64) meetupgrid_changes.meetups = /*meetups*/ ctx[6];
     			meetupgrid.$set(meetupgrid_changes);
@@ -1340,11 +1940,25 @@ var app = (function () {
     		i: function intro(local) {
     			if (current) return;
     			transition_in(header.$$.fragment, local);
+    			transition_in(textinput0.$$.fragment, local);
+    			transition_in(textinput1.$$.fragment, local);
+    			transition_in(textinput2.$$.fragment, local);
+    			transition_in(textinput3.$$.fragment, local);
+    			transition_in(textinput4.$$.fragment, local);
+    			transition_in(textinput5.$$.fragment, local);
+    			transition_in(button.$$.fragment, local);
     			transition_in(meetupgrid.$$.fragment, local);
     			current = true;
     		},
     		o: function outro(local) {
     			transition_out(header.$$.fragment, local);
+    			transition_out(textinput0.$$.fragment, local);
+    			transition_out(textinput1.$$.fragment, local);
+    			transition_out(textinput2.$$.fragment, local);
+    			transition_out(textinput3.$$.fragment, local);
+    			transition_out(textinput4.$$.fragment, local);
+    			transition_out(textinput5.$$.fragment, local);
+    			transition_out(button.$$.fragment, local);
     			transition_out(meetupgrid.$$.fragment, local);
     			current = false;
     		},
@@ -1352,9 +1966,16 @@ var app = (function () {
     			destroy_component(header, detaching);
     			if (detaching) detach_dev(t0);
     			if (detaching) detach_dev(main);
+    			destroy_component(textinput0);
+    			destroy_component(textinput1);
+    			destroy_component(textinput2);
+    			destroy_component(textinput3);
+    			destroy_component(textinput4);
+    			destroy_component(textinput5);
+    			destroy_component(button);
     			destroy_component(meetupgrid);
     			mounted = false;
-    			run_all(dispose);
+    			dispose();
     		}
     	};
 
@@ -1372,73 +1993,59 @@ var app = (function () {
     function instance($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('App', slots, []);
-    	let title = '';
-    	let subTitle = '';
-    	let address = '';
-    	let email = '';
-    	let description = '';
-    	let imageUrl = '';
+    	let title = "";
+    	let subtitle = "";
+    	let address = "";
+    	let email = "";
+    	let description = "";
+    	let imageUrl = "";
 
     	let meetups = [
     		{
-    			id: 'm1',
-    			title: 'Coding Bootcamp',
-    			subTitle: 'learn to code',
-    			description: 'in this meetup',
-    			imageUrl: '',
-    			address: '27th',
-    			contactEmail: 'korea4127@gmail.com'
+    			id: "m1",
+    			title: "Coding Bootcamp",
+    			subtitle: "Learn to code in 2 hours",
+    			description: "In this meetup, we will have some experts that teach you how to code!",
+    			imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Caffe_Nero_coffee_bar%2C_High_St%2C_Sutton%2C_Surrey%2C_Greater_London.JPG/800px-Caffe_Nero_coffee_bar%2C_High_St%2C_Sutton%2C_Surrey%2C_Greater_London.JPG",
+    			address: "27th Nerd Road, 32523 New York",
+    			contactEmail: "code@test.com",
+    			isFavorite: false
     		},
     		{
-    			id: 'm2',
-    			title: 'Swim 투게더',
-    			subTitle: 'learn to code',
-    			description: 'in this meetup',
-    			imageUrl: '',
-    			address: '27th',
-    			contactEmail: 'korea4127@gmail.com'
-    		},
-    		{
-    			id: 'm3',
-    			title: '후후후후p',
-    			subTitle: 'learn to code',
-    			description: 'in this meetup',
-    			imageUrl: '',
-    			address: '27th',
-    			contactEmail: 'korea4127@gmail.com'
-    		},
-    		{
-    			id: 'm4',
-    			title: '이직을 해보자',
-    			subTitle: 'learn to code',
-    			description: 'in this meetup',
-    			imageUrl: '',
-    			address: '27th',
-    			contactEmail: 'korea4127@gmail.com'
+    			id: "m2",
+    			title: "Swim Together",
+    			subtitle: "Let's go for some swimming",
+    			description: "We will simply swim some rounds!",
+    			imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Olympic_swimming_pool_%28Tbilisi%29.jpg/800px-Olympic_swimming_pool_%28Tbilisi%29.jpg",
+    			address: "27th Nerd Road, 32523 New York",
+    			contactEmail: "swim@test.com",
+    			isFavorite: false
     		}
     	];
 
     	function addMeetup() {
-    		// meetups.push({
-    		//     id: Math.random(),
-    		//     title,
-    		//     subTitle,
-    		//     address,
-    		//     email,
-    		//     description,
-    		//     imageUrl
-    		// }); // 작동 안됨
     		const newMeetup = {
-    			id: Math.random(),
+    			id: Math.random().toString(),
     			title,
-    			subTitle,
-    			address,
-    			email,
+    			subtitle,
     			description,
-    			imageUrl
+    			imageUrl,
+    			contactEmail: email,
+    			address
     		};
 
+    		// meetups.push(newMeetup); // DOES NOT WORK!
     		$$invalidate(6, meetups = [newMeetup, ...meetups]);
+    	}
+
+    	function toggleFavorite(event) {
+    		const id = event.detail;
+    		const updatedMeetup = { ...meetups.find(m => m.id === id) };
+    		updatedMeetup.isFavorite = !updatedMeetup.isFavorite;
+    		const meetupIndex = meetups.findIndex(m => m.id === id);
+    		const updatedMeetups = [...meetups];
+    		updatedMeetups[meetupIndex] = updatedMeetup;
+    		$$invalidate(6, meetups = updatedMeetups);
     	}
 
     	const writable_props = [];
@@ -1447,53 +2054,32 @@ var app = (function () {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<App> was created with unknown prop '${key}'`);
     	});
 
-    	function input0_input_handler() {
-    		title = this.value;
-    		$$invalidate(0, title);
-    	}
-
-    	function input1_input_handler() {
-    		subTitle = this.value;
-    		$$invalidate(1, subTitle);
-    	}
-
-    	function input2_input_handler() {
-    		address = this.value;
-    		$$invalidate(2, address);
-    	}
-
-    	function input3_input_handler() {
-    		imageUrl = this.value;
-    		$$invalidate(5, imageUrl);
-    	}
-
-    	function input4_input_handler() {
-    		email = this.value;
-    		$$invalidate(3, email);
-    	}
-
-    	function textarea_input_handler() {
-    		description = this.value;
-    		$$invalidate(4, description);
-    	}
+    	const input_handler = event => $$invalidate(0, title = event.target.value);
+    	const input_handler_1 = event => $$invalidate(1, subtitle = event.target.value);
+    	const input_handler_2 = event => $$invalidate(2, address = event.target.value);
+    	const input_handler_3 = event => $$invalidate(5, imageUrl = event.target.value);
+    	const input_handler_4 = event => $$invalidate(3, email = event.target.value);
+    	const input_handler_5 = event => $$invalidate(4, description = event.target.value);
 
     	$$self.$capture_state = () => ({
     		Header,
-    		MeetupItem,
     		MeetupGrid,
+    		TextInput,
+    		Button,
     		title,
-    		subTitle,
+    		subtitle,
     		address,
     		email,
     		description,
     		imageUrl,
     		meetups,
-    		addMeetup
+    		addMeetup,
+    		toggleFavorite
     	});
 
     	$$self.$inject_state = $$props => {
     		if ('title' in $$props) $$invalidate(0, title = $$props.title);
-    		if ('subTitle' in $$props) $$invalidate(1, subTitle = $$props.subTitle);
+    		if ('subtitle' in $$props) $$invalidate(1, subtitle = $$props.subtitle);
     		if ('address' in $$props) $$invalidate(2, address = $$props.address);
     		if ('email' in $$props) $$invalidate(3, email = $$props.email);
     		if ('description' in $$props) $$invalidate(4, description = $$props.description);
@@ -1507,19 +2093,20 @@ var app = (function () {
 
     	return [
     		title,
-    		subTitle,
+    		subtitle,
     		address,
     		email,
     		description,
     		imageUrl,
     		meetups,
     		addMeetup,
-    		input0_input_handler,
-    		input1_input_handler,
-    		input2_input_handler,
-    		input3_input_handler,
-    		input4_input_handler,
-    		textarea_input_handler
+    		toggleFavorite,
+    		input_handler,
+    		input_handler_1,
+    		input_handler_2,
+    		input_handler_3,
+    		input_handler_4,
+    		input_handler_5
     	];
     }
 

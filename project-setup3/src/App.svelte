@@ -1,108 +1,118 @@
 <script>
     import Header from "./UI/Header.svelte";
-    import MeetupItem from "./Meetups/MeetupItem.svelte";
     import MeetupGrid from "./Meetups/MeetupGrid.svelte";
-
-    let title = '';
-    let subTitle = '';
-    let address = '';
-    let email = '';
-    let description = '';
-    let imageUrl = '';
+    import TextInput from "./UI/TextInput.svelte";
+    import Button from './UI/Button.svelte';
+  
+    let title = "";
+    let subtitle = "";
+    let address = "";
+    let email = "";
+    let description = "";
+    let imageUrl = "";
+  
     let meetups = [
-        {
-            id: 'm1',
-            title: 'Coding Bootcamp',
-            subTitle: 'learn to code',
-            description: 'in this meetup',
-            imageUrl: '',
-            address:'27th',
-            contactEmail:'korea4127@gmail.com'
-        },
-        {
-            id: 'm2',
-            title: 'Swim 투게더',
-            subTitle: 'learn to code',
-            description: 'in this meetup',
-            imageUrl: '',
-            address:'27th',
-            contactEmail:'korea4127@gmail.com'
-        },
-        {
-            id: 'm3',
-            title: '후후후후p',
-            subTitle: 'learn to code',
-            description: 'in this meetup',
-            imageUrl: '',
-            address:'27th',
-            contactEmail:'korea4127@gmail.com'
-        },
-        {
-            id: 'm4',
-            title: '이직을 해보자',
-            subTitle: 'learn to code',
-            description: 'in this meetup',
-            imageUrl: '',
-            address:'27th',
-            contactEmail:'korea4127@gmail.com'
-        }
-    ]
-
-    function addMeetup(){
-        // meetups.push({
-        //     id: Math.random(),
-        //     title,
-        //     subTitle,
-        //     address,
-        //     email,
-        //     description,
-        //     imageUrl
-        // }); // 작동 안됨
-        const newMeetup =  {
-            id: Math.random(),
-            title,
-            subTitle,
-            address,
-            email,
-            description,
-            imageUrl
-        };
-        meetups = [newMeetup, ...meetups]
+      {
+        id: "m1",
+        title: "Coding Bootcamp",
+        subtitle: "Learn to code in 2 hours",
+        description:
+          "In this meetup, we will have some experts that teach you how to code!",
+        imageUrl:
+          "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Caffe_Nero_coffee_bar%2C_High_St%2C_Sutton%2C_Surrey%2C_Greater_London.JPG/800px-Caffe_Nero_coffee_bar%2C_High_St%2C_Sutton%2C_Surrey%2C_Greater_London.JPG",
+        address: "27th Nerd Road, 32523 New York",
+        contactEmail: "code@test.com",
+        isFavorite: false
+      },
+      {
+        id: "m2",
+        title: "Swim Together",
+        subtitle: "Let's go for some swimming",
+        description: "We will simply swim some rounds!",
+        imageUrl:
+          "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Olympic_swimming_pool_%28Tbilisi%29.jpg/800px-Olympic_swimming_pool_%28Tbilisi%29.jpg",
+        address: "27th Nerd Road, 32523 New York",
+        contactEmail: "swim@test.com",
+        isFavorite: false
+      }
+    ];
+  
+    function addMeetup() {
+      const newMeetup = {
+        id: Math.random().toString(),
+        title: title,
+        subtitle: subtitle,
+        description: description,
+        imageUrl: imageUrl,
+        contactEmail: email,
+        address: address
+      };
+  
+      // meetups.push(newMeetup); // DOES NOT WORK!
+      meetups = [newMeetup, ...meetups];
     }
-</script>
-<style>
+  
+    function toggleFavorite(event) {
+      const id = event.detail;
+      const updatedMeetup = { ...meetups.find(m => m.id === id) };
+      updatedMeetup.isFavorite = !updatedMeetup.isFavorite;
+      const meetupIndex = meetups.findIndex(m => m.id === id);
+      const updatedMeetups = [...meetups];
+      updatedMeetups[meetupIndex] = updatedMeetup;
+      meetups = updatedMeetups;
+    }
+  </script>
+  
+  <style>
     main {
-        margin-top: 5rem;
+      margin-top: 5rem;
     }
-</style>
-<Header/>
-<main>
+  
+    form {
+      width: 30rem;
+      max-width: 90%;
+      margin: auto;
+    }
+  </style>
+  
+  <Header />
+  
+  <main>
     <form on:submit|preventDefault={addMeetup}>
-        <div class="form-control">
-            <label for="title">Title</label>
-            <input type="text" id="title" bind:value={title}>
-        </div>
-        <div class="form-control">
-            <label for="title">subTitle</label>
-            <input type="text" id="subTitle" bind:value={subTitle}>
-        </div>
-        <div class="form-control">
-            <label for="address">address</label>
-            <input type="text" id="address" bind:value={address}>
-        </div>
-        <div class="form-control">
-            <label for="imageUrl">imageUrl</label>
-            <input type="text" id="imageUrl" bind:value={imageUrl}>
-        </div>
-        <div class="form-control">
-            <label for="email">email</label>
-            <input type="email" id="email" bind:value={email}>
-        </div>
-        <div class="form-control">
-            <label for="description">description</label>
-            <textarea rows="3" id="description" bind:value={description}/>
-        </div>
-        <button type="submit">Save</button>
+      <TextInput
+        id="title"
+        label="Title"
+        value={title}
+        on:input={event => (title = event.target.value)} />
+      <TextInput
+        id="subtitle"
+        label="Subtitle"
+        value={subtitle}
+        on:input={event => (subtitle = event.target.value)} />
+      <TextInput
+        id="address"
+        label="Address"
+        value={address}
+        on:input={event => (address = event.target.value)} />
+      <TextInput
+        id="imageUrl"
+        label="Image URL"
+        value={imageUrl}
+        on:input={event => (imageUrl = event.target.value)} />
+      <TextInput
+        id="email"
+        label="E-Mail"
+        type="email"
+        value={email}
+        on:input={event => (email = event.target.value)} />
+      <TextInput
+        id="description"
+        label="Description"
+        controlType="textarea"
+        value={description}
+        on:input={event => (description = event.target.value)} />
+      <Button type="submit" caption="Save" />
     </form>
-    <MeetupGrid {meetups}/>
-</main>
+    <MeetupGrid {meetups} on:togglefavorite="{toggleFavorite}" />
+  </main>
+  
