@@ -1,4 +1,5 @@
 <script>
+    import meetups from './meetups-sotre';
     import { createEventDispatcher } from 'svelte'
     import TextInput from "../UI/TextInput.svelte";
     import Button from "../UI/Button.svelte";
@@ -7,25 +8,36 @@
 
 
     let title = "";
-    let titleValid = false;
     let subtitle = "";
     let address = "";
     let email = "";
     let description = "";
     let imageUrl = "";
 
+    let formIsValid = false;
+
     $: titleValid = !isEmpty(title);
+    $: subtitleValid = !isEmpty(subtitle);
+    $: formIsValid = titleValid && subtitleValid;
     const dispatch = createEventDispatcher();
 
     function submitForm(){
-        dispatch('save', {
-            title: title,
-            subtitle: subtitle,
-            description: description,
-            imageUrl: imageUrl,
-            contactEmail: email,
-            address: address
-        });
+        if(!formIsValid){
+            return;
+        }
+        const newMeetup = {
+        title: title,
+        subtitle: subtitle,
+        description: description,
+        imageUrl: imageUrl,
+        contactEmail: email,
+        address: address
+      };
+  
+      // meetups.push(newMeetup); // DOES NOT WORK!
+      meetups.addMeetup(newMeetup);
+
+        dispatch('save');
     }
 
     function cancel(){
@@ -52,6 +64,8 @@ form {
         <TextInput
           id="subtitle"
           label="Subtitle"
+          valid={subtitleValid}
+          validityMessage="소제목을 입력하세요"
           value={subtitle}
           on:input={event => (subtitle = event.target.value)} />
         <TextInput
@@ -78,7 +92,7 @@ form {
           on:input={event => (description = event.target.value)} />
       </form>
       <div slot="footer">
-        <Button type="button" on:click={submitForm}>저장</Button>
+        <Button type="button" on:click={submitForm} disabled={!formIsValid}>저장</Button>
         <Button type="button" mode="outline" on:click={cancel}>취소</Button>
       </div>
 </Modal>
