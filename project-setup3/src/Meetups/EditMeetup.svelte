@@ -26,13 +26,13 @@
             return;
         }
         const newMeetup = {
-        title: title,
-        subtitle: subtitle,
-        description: description,
-        imageUrl: imageUrl,
-        contactEmail: email,
-        address: address
-      };
+            title: title,
+            subtitle: subtitle,
+            description: description,
+            imageUrl: imageUrl,
+            contactEmail: email,
+            address: address
+        };
   
       // meetups.push(newMeetup); // DOES NOT WORK!
       meetups.addMeetup(newMeetup);
