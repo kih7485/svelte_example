@@ -38,6 +38,16 @@ const customMeetupsStore = {
       return [newMeetup, ...items];
     });
   },
+  updatedMeetup: (id, meetupData) => {
+    meetups.update((items) => {
+      const meetupIndex = items.findIndex((item) => item.id === id);
+      const updatedMeetup = { ...items[meetupIndex], ...meetupData };
+      const updatedMeetups = [...items];
+      updatedMeetups[meetupIndex] = updatedMeetup;
+
+      return updatedMeetups;
+    });
+  },
   toggleFavorite: (id) => {
     meetups.update((items) => {
       const updatedMeetup = { ...items.find((m) => m.id === id) };

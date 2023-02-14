@@ -6,6 +6,7 @@
     import Modal from '../UI/Modal.svelte';
     import { isEmpty } from '../helpers/validation'
 
+    export let id = null;
 
     let title = "";
     let subtitle = "";
@@ -16,6 +17,22 @@
 
     let formIsValid = false;
 
+
+    if(id){
+      const unSubscribe = meetups.subscribe(items => {
+        const selectedMeetup = items.find(item => item.id === id);
+        title = selectedMeetup.title;
+        subtitle = selectedMeetup.subtitle;
+        address = selectedMeetup.address;
+        email = selectedMeetup.email;
+        description = selectedMeetup.description;
+        imageUrl = selectedMeetup.imageUrl;
+      });
+
+      unSubscribe();
+    }
+
+
     $: titleValid = !isEmpty(title);
     $: subtitleValid = !isEmpty(subtitle);
     $: formIsValid = titleValid && subtitleValid;
@@ -25,7 +42,7 @@
         if(!formIsValid){
             return;
         }
-        const newMeetup = {
+        const meetupData = {
             title: title,
             subtitle: subtitle,
             description: description,
@@ -35,13 +52,17 @@
         };
   
       // meetups.push(newMeetup); // DOES NOT WORK!
-      meetups.addMeetup(newMeetup);
-
-        dispatch('save');
+      
+      if(id){
+        meetups.updatedMeetup(id, meetupData);
+      }else{
+        meetups.addMeetup(meetupData);
+      }
+      dispatch('save');
     }
 
     function cancel(){
-        dispatch('cancel');
+      dispatch('cancel');
     }
 </script>
 
