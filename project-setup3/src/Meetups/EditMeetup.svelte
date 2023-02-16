@@ -64,6 +64,11 @@
     function cancel(){
       dispatch('cancel');
     }
+
+    function deleteMeetup(){
+      meetups.removeMeetup(id);
+      dispatch('save');
+    }
 </script>
 
 <style>
@@ -115,5 +120,8 @@ form {
       <div slot="footer">
         <Button type="button" on:click={submitForm} disabled={!formIsValid}>저장</Button>
         <Button type="button" mode="outline" on:click={cancel}>취소</Button>
+        {#if id}
+          <Button type="button" on:click={deleteMeetup}>삭제</Button>
+        {/if}
       </div>
 </Modal>
