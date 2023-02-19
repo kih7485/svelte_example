@@ -8,6 +8,7 @@
 <style>
     div {
         font-size: 0px;
+        margin-right: 2rem;
     }
 
     button {
