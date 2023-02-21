@@ -54,9 +54,39 @@
       // meetups.push(newMeetup); // DOES NOT WORK!
       
       if(id){
-        meetups.updatedMeetup(id, meetupData);
+        fetch(`https://svelte-course-214ac-default-rtdb.firebaseio.com/meetups/${id}.json`, {
+          method: 'PATCH',
+          body: JSON.stringify({...meetupData}),
+          headers: {'Content-Type': 'application/json'}
+        })
+        .then(res => {
+          if(!res.ok){
+            throw new Error("실패");
+          }
+
+          meetups.updatedMeetup(id, meetupData);
+        })
+        .catch(err => console.error(err))
+        
       }else{
-        meetups.addMeetup(meetupData);
+        fetch("https://svelte-course-214ac-default-rtdb.firebaseio.com/meetups.json", {
+          method: 'POST',
+          body: JSON.stringify({...meetupData, isFavorite: false}),
+          headers: {'Content-Type': 'application/json'}
+        })
+        .then(res => {
+          if(!res.ok){
+            throw new Error("실패");
+          }
+
+          return res.json();
+        })
+        .then(data => {
+          meetups.addMeetup({...meetupData, isFavorite:false, id: data.name});
+          console.log(data)
+        })
+        .catch(err => console.error(err))
+       
       }
       dispatch('save');
     }
@@ -66,7 +96,18 @@
     }
 
     function deleteMeetup(){
-      meetups.removeMeetup(id);
+      fetch(`https://svelte-course-214ac-default-rtdb.firebaseio.com/meetups/${id}.json`, {
+          method: 'DELETE'
+        })
+        .then(res => {
+          if(!res.ok){
+            throw new Error("실패");
+          }
+          meetups.removeMeetup(id);
+        })
+        .catch(err => console.error(err))
+
+      
       dispatch('save');
     }
 </script>

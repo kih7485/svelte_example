@@ -38,6 +38,10 @@
       display: flex;
       justify-content: space-between;
     }
+
+    #no-meetups{
+      margin: 1rem;
+    }
   </style>
   
   <section id="meetup-controls">
@@ -47,6 +51,9 @@
     <MeetupFilter on:select={setFilter}/>
 
   </section>
+  {#if filterMeetups.length === 0}
+    <p id="no-meetups">데이터가 없습니다.</p>
+  {/if}
   <section id="meetups">
     {#each filterMeetups as meetup (meetup.id)}
       <div trasition:scale animate:flip={{duration:300}}> 
@@ -65,4 +72,7 @@
       </div>
     {/each}
   </section>
+  
+
+
   
