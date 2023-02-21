@@ -1,5 +1,7 @@
 <script>
     import {onMount} from 'svelte';
+    import hobbyStore from "./hobby-store";
+
     let hobbies = [];
     let hobbyInput;
     let isLoading = false;
@@ -15,7 +17,7 @@
             return res.json();    
         }).then(data => {
             console.log(data, "data");
-            hobbies = Object.values(data);
+            hobbyStore.setHobbies(Object.values(data));
         })
         .catch(err => {
             isLoading = false;
@@ -25,7 +27,7 @@
     
 
     function addHobby(){
-        hobbies =[...hobbies, hobbyInput.value]
+        hobbyStore.addHobby(hobbyInput.value);
 
         isLoading = true;
         fetch('https://svelte-course-214ac-default-rtdb.firebaseio.com/hobbies.json', {
@@ -56,7 +58,7 @@
     <p>로딩중...</p>
 {:else}
     <ul>
-        {#each hobbies as hobby }
+        {#each $hobbyStore as hobby }
             <li>{hobby}</li>
         {/each}
     </ul>
